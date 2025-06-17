@@ -67,7 +67,7 @@ if st.button("評価する") and src.strip():
                 temperature=0.1,
                 messages=[
                     {"role": "system", "content": PROMPT},
-                    {"role": "user", "content": f"###本文\n{textwrap.shorten(body,12000,'...[cut]...')}\n\n###類似\n" + "\n".join(search_ddg(query))}]
+                    {"role": "user", "content": f"###本文\n{textwrap.shorten(body, width=12000, placeholder="...[cut]...")}\n\n###類似\n" + "\n".join(search_ddg(query))}]
             )
             result = json.loads(chat.choices[0].message.content)
         except Exception as e:
