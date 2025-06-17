@@ -30,8 +30,14 @@ def fetch(src: str):
 
 # ───────── 類似ページ候補 ─────────
 def search_ddg(query: str, k: int = 5):
-    with DDGS() as ddgs:
-        return [f"{r['title']} — {r['body']}" for r in ddgs.text(query, max_results=k)]
+    """DuckDuckGo 検索。失敗したら空リストを返す"""
+    # クエリが長すぎるとエラーが出やすいので 100 文字で切る
+    q = query[:100]
+    try:
+        with DDGS() as ddgs:
+            return [f"{r['title']} — {r['body']}" for r in ddgs.text(q, max_results=k)]
+    except Exception:
+        return []
 
 PROMPT = """
 あなたは Google Search Quality Evaluator です。
