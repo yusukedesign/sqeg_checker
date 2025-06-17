@@ -17,17 +17,30 @@ src = st.text_area("URL または本文を入力し、下のボタンを押し�
 if st.button("評価する"):
 
     # ─── 1. URLなら本文抽出 ────────────────────────────────
-    def fetch(text_or_url: str):
-        if text_or_url.startswith("http"):
-            art = Article(text_or_url, language="ja")
+    import requests, bs4   # ← 先頭付近の import に追加
+
+def fetch(src: str):
+    """URLなら本文抽出。失敗したら空文字を返す。"""
+    if src.startswith("http"):
+        try:
+            art = Article(src, language="ja")
             art.download(); art.parse()
             return art.title or "", art.text
-        return "", text_or_url
+        except Exception:
+            # newspaper3k 失敗→ requests + BeautifulSoup
+            try:
+                html = requests.get(src, timeout=10).text
+                soup = bs4.BeautifulSoup(html, "html.parser")
+                # <title>タグでタイトルを取得
+                title = soup.title.string.strip() if soup.title else ""
+                # 本文は <p> を全部つなぐ（簡易）
+                body = "\n".join(p.get_text(" ", strip=True) for p in soup.find_all("p"))
+                return title, body[:20000]  # 2万字で切る
+            except Exception:
+                return "", ""
+    # 直接本文
+    return "", src
 
-    title, body = fetch(src.strip())
-    if not body:
-        st.error("本文が取得できませんでした。URL/テキストを確認してください。")
-        st.stop()
 
     # ─── 2. DuckDuckGoで類似タイトル取得（コピー疑惑チェック用） ───
     def search_ddg(query: str, k: int = 5):
