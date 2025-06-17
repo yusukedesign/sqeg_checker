@@ -7,15 +7,14 @@ import openai
 
 # ─── 環境設定 ──────────────────────────────
 warnings.filterwarnings("ignore", category=SyntaxWarning)
-openai.api_key = st.secrets["OPENAI_API_KEY"]  # Secrets にキー必須
-MODEL_NAME = "gpt-3.5-turbo"                   # 旧APIでも使えるモデル
+openai.api_key = st.secrets["OPENAI_API_KEY"]
+MODEL_NAME = "gpt-3.5-turbo"
 
 st.set_page_config(page_title="SQEG クイックチェッカー", page_icon="🔍")
 st.title("🔍 SQEG 2025-01 簡易評価ツール")
 
 # ─── 本文取得 ─────────────────────────────
 def fetch(src: str):
-    """URL なら newspaper3k → 失敗時 requests+BS4。本文が取れなければ空文字。"""
     if src.startswith("http"):
         try:
             art = Article(src, language="ja")
@@ -32,9 +31,9 @@ def fetch(src: str):
                 return "", ""
     return "", src
 
-# ─── 類似ページ候補 (DuckDuckGo) ─────────────
+# ─── 類似ページ候補 ────────────────────────
 def search_ddg(query: str, k: int = 5):
-    q = query[:100]  # 長すぎると失敗するので 100 文字で切る
+    q = query[:100]
     try:
         with DDGS() as ddgs:
             return [f"{r['title']} — {r['body']}" for r in ddgs.text(q, max_results=k)]
@@ -45,7 +44,7 @@ def search_ddg(query: str, k: int = 5):
 PROMPT = """
 あなたは Google Search Quality Evaluator です。
 記事本文と類似ページ候補を渡します。
-SQEG 2025-01 (3.2 / 4.6.6 / 5.2.1 / 7.1) に従い次の JSON を返してください。
+SQEG 2025-01 (3.2 / 4.6.6 / 5.2.1 / 7.1) に従い、次の JSON を返してください。
 
 {
   "pq":"Lowest|Low|Medium|High|Highest",
@@ -56,7 +55,7 @@ SQEG 2025-01 (3.2 / 4.6.6 / 5.2.1 / 7.1) に従い次の JSON を返してくだ
   "improvement_advice":"<200字以内>"
 }
 
-必ず **JSON オブジェクトのみ** を出力し、前後に説明文や ``` は付けないでください。
+必ず JSON オブジェクトのみを出力してください。
 """
 
 # ─── UI ───────────────────────────────────
@@ -77,7 +76,6 @@ if st.button("評価する") and src.strip():
         )
 
         try:
-            # 旧 openai<=0.28.x インターフェース
             chat = openai.ChatCompletion.create(
                 model=MODEL_NAME,
                 temperature=0.1,
@@ -87,10 +85,9 @@ if st.button("評価する") and src.strip():
                 ]
             )
             raw = chat.choices[0].message.content.strip()
-            # ```json ... ``` で返る場合の囲み除去
             if raw.startswith("```"):
                 raw = raw.split("```")[1]
-            result = json.loads(raw)
+            data = json.loads(raw)
 
         except json.JSONDecodeError:
             st.error("❌ JSON の解析に失敗しました。モデル出力を確認してください。")
@@ -101,16 +98,30 @@ if st.button("評価する") and src.strip():
             st.exception(e)
             st.stop()
 
+    # ─── ラベル変換 ────────────────────────
+    label_map = {
+        "pq": "ページ品質 (PQ)",
+        "nm": "ニーズ充足度 (NM)",
+        "effort": "労力",
+        "originality": "独自性",
+        "duplication_rate": "重複率 (%)",
+        "skill": "スキル/技巧",
+        "accuracy": "正確性",
+        "eeat_summary": "E-E-A-T 要約",
+        "improvement_advice": "改善アドバイス"
+    }
+    display_result = {label_map[k]: v for k, v in data.items()}
+
     # ─── 結果表示 ────────────────────────
     st.subheader("評価結果")
-    st.json(result, expanded=False)
-    if result["pq"] in ["Lowest", "Low"]:
-        st.error("⚠️ PQ が低評価です。リライトを検討してください。")
+    st.json(display_result, expanded=False)
+    if data["pq"] in ["Lowest", "Low"]:
+        st.error("⚠️ ページ品質が低評価です。リライトを検討してください。")
 
     # ─── CSV ログ ───────────────────────
     pd.DataFrame([{
         "timestamp": datetime.datetime.now().isoformat(timespec="seconds"),
-        "source": src[:100], **result
+        "source": src[:100], **data
     }]).to_csv("sqeg_log.csv", mode="a", index=False, header=not os.path.exists("sqeg_log.csv"))
     st.success("結果を sqeg_log.csv に追記しました ✅")
 # ─────────────────────────────────────────
