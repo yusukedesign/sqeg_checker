@@ -1,3 +1,5 @@
+requests
+beautifulsoup4
 lxml==4.9.3
 beautifulsoup4
 cssselect
