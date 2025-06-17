@@ -8,29 +8,36 @@ import openai
 warnings.filterwarnings("ignore", category=SyntaxWarning)
 openai.api_key = st.secrets["OPENAI_API_KEY"]
 
-PRIMARY_MODEL   = "gpt-4o-mini"     # 4o 系。権限が無い場合は下で自動フォールバック
-FALLBACK_MODEL  = "gpt-3.5-turbo"   # 代替
+PRIMARY_MODEL   = "gpt-4o-mini"   # 権限が無ければ下で自動フォールバック
+FALLBACK_MODEL  = "gpt-3.5-turbo"
 
 st.set_page_config(page_title="SQEG クイックチェッカー", page_icon="🔍")
-st.title("🔍 SQEG 2025-01 簡易評価ツール（GPT-4o 版）")
+st.title("🔍 SQEG 2025-01 簡易評価ツール（UA 対応版）")
 
 # ─── 本文取得 ─────────────────────────────
 def fetch(src: str):
+    """
+    URL なら newspaper3k → 失敗時 requests+BS4。
+    requests には常に User-Agent を付加して 403 を回避。
+    """
+    ua_headers = {"User-Agent": "Mozilla/5.0"}   # ★ 追加
     if src.startswith("http"):
+        # 1) newspaper3k
         try:
             art = Article(src, language="ja")
             art.download(); art.parse()
             return art.title or "", art.text
         except Exception:
+            # 2) requests + BeautifulSoup (User-Agent 付き)
             try:
-                html = requests.get(src, timeout=10, headers={"User-Agent":"Mozilla/5.0"}).text
+                html = requests.get(src, timeout=10, headers=ua_headers).text  # ★
                 soup = bs4.BeautifulSoup(html, "html.parser")
                 title = soup.title.string.strip() if soup.title else ""
                 body  = "\n".join(p.get_text(" ", strip=True) for p in soup.find_all("p"))
                 return title, body[:20000]
             except Exception:
                 return "", ""
-    return "", src
+    return "", src   # 直接本文
 
 # ─── 類似ページ候補 ────────────────────────
 def search_ddg(query: str, k: int = 5):
@@ -45,7 +52,7 @@ def search_ddg(query: str, k: int = 5):
 PROMPT = """
 あなたは Google Search Quality Evaluator です。
 記事本文と類似ページ候補を渡します。
-SQEG 2025-01 (3.2 / 4.6.6 / 5.2.1 / 7.1) に従い、日本語で次の JSON を返してください。
+SQEG 2025-01 の基準に従い、日本語で次の JSON を返してください。
 
 {
   "pq":"Lowest|Low|Medium|High|Highest",
@@ -82,14 +89,13 @@ if st.button("評価する") and src.strip():
                 temperature=0.1,
                 messages=[
                     {"role":"system","content":PROMPT},
-                    {"role":"user",  "content":user_content}
+                    {"role":"user","content":user_content}
                 ]
             )
 
         try:
             chat = call_openai(PRIMARY_MODEL)
         except Exception:
-            # 4 系権限が無い場合などは 3.5 に切替
             chat = call_openai(FALLBACK_MODEL)
 
         raw = chat.choices[0].message.content.strip()
@@ -103,15 +109,14 @@ if st.button("評価する") and src.strip():
             st.write("受信内容:", raw)
             st.stop()
 
-    # ─── 日本語ラベル変換 ─────────────────
+    # ─── ラベル変換 ─────────────────────────
     label_map = {
-        "pq":"ページ品質 (PQ)",
-        "nm":"ニーズ充足度 (NM)",
+        "pq":"ページ品質 (PQ)","nm":"ニーズ充足度 (NM)",
         "effort":"労力","originality":"独自性","duplication_rate":"重複率 (%)",
         "skill":"スキル/技巧","accuracy":"正確性",
         "eeat_summary":"E-E-A-T 要約","improvement_advice":"改善アドバイス"
     }
-    display = {label_map[k]:v for k,v in data.items()}
+    display = {label_map[k]: v for k, v in data.items()}
 
     # ─── 結果表示 ────────────────────────
     st.subheader("評価結果")
@@ -122,7 +127,7 @@ if st.button("評価する") and src.strip():
     # ─── CSV ログ ───────────────────────
     pd.DataFrame([{
         "timestamp": datetime.datetime.now().isoformat(timespec="seconds"),
-        "source":src[:100], **data
+        "source": src[:100], **data
     }]).to_csv("sqeg_log.csv", mode="a", index=False, header=not os.path.exists("sqeg_log.csv"))
     st.success("結果を sqeg_log.csv に追記しました ✅")
 # ─────────────────────────────────────────
