@@ -1,17 +1,18 @@
-# ───────────────── app.py ─────────────────
 import os, json, textwrap, datetime, requests, bs4, pandas as pd, warnings
 import streamlit as st
 from newspaper import Article
 from duckduckgo_search import DDGS
 import openai
 
-# ─── 環境設定 ──────────────────────────────
+# ─── 基本設定 ─────────────────────────────
 warnings.filterwarnings("ignore", category=SyntaxWarning)
 openai.api_key = st.secrets["OPENAI_API_KEY"]
-MODEL_NAME = "gpt-3.5-turbo"
+
+PRIMARY_MODEL   = "gpt-4o-mini"     # 4o 系。権限が無い場合は下で自動フォールバック
+FALLBACK_MODEL  = "gpt-3.5-turbo"   # 代替
 
 st.set_page_config(page_title="SQEG クイックチェッカー", page_icon="🔍")
-st.title("🔍 SQEG 2025-01 簡易評価ツール")
+st.title("🔍 SQEG 2025-01 簡易評価ツール（GPT-4o 版）")
 
 # ─── 本文取得 ─────────────────────────────
 def fetch(src: str):
@@ -22,7 +23,7 @@ def fetch(src: str):
             return art.title or "", art.text
         except Exception:
             try:
-                html = requests.get(src, timeout=10, headers={"User-Agent": "Mozilla/5.0"}).text
+                html = requests.get(src, timeout=10, headers={"User-Agent":"Mozilla/5.0"}).text
                 soup = bs4.BeautifulSoup(html, "html.parser")
                 title = soup.title.string.strip() if soup.title else ""
                 body  = "\n".join(p.get_text(" ", strip=True) for p in soup.find_all("p"))
@@ -44,7 +45,7 @@ def search_ddg(query: str, k: int = 5):
 PROMPT = """
 あなたは Google Search Quality Evaluator です。
 記事本文と類似ページ候補を渡します。
-SQEG 2025-01 (3.2 / 4.6.6 / 5.2.1 / 7.1) に従い、次の JSON を返してください。
+SQEG 2025-01 (3.2 / 4.6.6 / 5.2.1 / 7.1) に従い、日本語で次の JSON を返してください。
 
 {
   "pq":"Lowest|Low|Medium|High|Highest",
@@ -75,53 +76,53 @@ if st.button("評価する") and src.strip():
             + "\n".join(search_ddg(query))
         )
 
-        try:
-            chat = openai.ChatCompletion.create(
-                model=MODEL_NAME,
+        def call_openai(model_name):
+            return openai.ChatCompletion.create(
+                model=model_name,
                 temperature=0.1,
                 messages=[
-                    {"role": "system", "content": PROMPT},
-                    {"role": "user",   "content": user_content}
+                    {"role":"system","content":PROMPT},
+                    {"role":"user",  "content":user_content}
                 ]
             )
-            raw = chat.choices[0].message.content.strip()
-            if raw.startswith("```"):
-                raw = raw.split("```")[1]
-            data = json.loads(raw)
 
+        try:
+            chat = call_openai(PRIMARY_MODEL)
+        except Exception:
+            # 4 系権限が無い場合などは 3.5 に切替
+            chat = call_openai(FALLBACK_MODEL)
+
+        raw = chat.choices[0].message.content.strip()
+        if raw.startswith("```"):
+            raw = raw.split("```")[1]
+
+        try:
+            data = json.loads(raw)
         except json.JSONDecodeError:
             st.error("❌ JSON の解析に失敗しました。モデル出力を確認してください。")
             st.write("受信内容:", raw)
             st.stop()
-        except Exception as e:
-            st.error("❌ 予期しないエラーが発生しました")
-            st.exception(e)
-            st.stop()
 
-    # ─── ラベル変換 ────────────────────────
+    # ─── 日本語ラベル変換 ─────────────────
     label_map = {
-        "pq": "ページ品質 (PQ)",
-        "nm": "ニーズ充足度 (NM)",
-        "effort": "労力",
-        "originality": "独自性",
-        "duplication_rate": "重複率 (%)",
-        "skill": "スキル/技巧",
-        "accuracy": "正確性",
-        "eeat_summary": "E-E-A-T 要約",
-        "improvement_advice": "改善アドバイス"
+        "pq":"ページ品質 (PQ)",
+        "nm":"ニーズ充足度 (NM)",
+        "effort":"労力","originality":"独自性","duplication_rate":"重複率 (%)",
+        "skill":"スキル/技巧","accuracy":"正確性",
+        "eeat_summary":"E-E-A-T 要約","improvement_advice":"改善アドバイス"
     }
-    display_result = {label_map[k]: v for k, v in data.items()}
+    display = {label_map[k]:v for k,v in data.items()}
 
     # ─── 結果表示 ────────────────────────
     st.subheader("評価結果")
-    st.json(display_result, expanded=False)
-    if data["pq"] in ["Lowest", "Low"]:
+    st.json(display, expanded=False)
+    if data["pq"] in ["Lowest","Low"]:
         st.error("⚠️ ページ品質が低評価です。リライトを検討してください。")
 
     # ─── CSV ログ ───────────────────────
     pd.DataFrame([{
         "timestamp": datetime.datetime.now().isoformat(timespec="seconds"),
-        "source": src[:100], **data
+        "source":src[:100], **data
     }]).to_csv("sqeg_log.csv", mode="a", index=False, header=not os.path.exists("sqeg_log.csv"))
     st.success("結果を sqeg_log.csv に追記しました ✅")
 # ─────────────────────────────────────────
